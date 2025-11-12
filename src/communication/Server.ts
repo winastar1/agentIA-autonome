@@ -25,6 +25,7 @@ export class CommunicationServer {
     this.setupMiddleware();
     this.setupRoutes();
     this.setupWebSocket();
+    this.setupOrchestratorEvents();
   }
 
   private setupMiddleware() {
@@ -230,6 +231,93 @@ export class CommunicationServer {
         client.send(data);
       }
     });
+  }
+
+  private broadcastEvent(eventType: string, data: any) {
+    const message = JSON.stringify({
+      type: eventType,
+      data,
+      timestamp: new Date().toISOString(),
+    });
+
+    this.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  }
+
+  private setupOrchestratorEvents() {
+    this.orchestrator.on('directive_received', (data) => {
+      logger.info('Orchestrator event: directive_received', data);
+      this.broadcastEvent('directive_received', data);
+    });
+
+    this.orchestrator.on('phase_changed', (data) => {
+      logger.info('Orchestrator event: phase_changed', data);
+      this.broadcastEvent('phase_changed', data);
+    });
+
+    this.orchestrator.on('thinking_completed', (data) => {
+      logger.info('Orchestrator event: thinking_completed', data);
+      this.broadcastEvent('thinking_completed', data);
+      this.sendAgentMessage(`💭 Thinking: ${data.thoughts}`);
+    });
+
+    this.orchestrator.on('plan_created', (data) => {
+      logger.info('Orchestrator event: plan_created', data);
+      this.broadcastEvent('plan_created', data);
+      this.sendAgentMessage(`📋 Plan created: ${data.plan.strategy} (${data.plan.taskCount} tasks)`);
+    });
+
+    this.orchestrator.on('plan_revised', (data) => {
+      logger.info('Orchestrator event: plan_revised', data);
+      this.broadcastEvent('plan_revised', data);
+      this.sendAgentMessage(`🔄 Plan revised: ${data.reason}`);
+    });
+
+    this.orchestrator.on('task_started', (data) => {
+      logger.info('Orchestrator event: task_started', data);
+      this.broadcastEvent('task_started', data);
+      this.sendAgentMessage(`▶️ Starting task: ${data.task.description}`);
+    });
+
+    this.orchestrator.on('task_completed', (data) => {
+      logger.info('Orchestrator event: task_completed', data);
+      this.broadcastEvent('task_completed', data);
+      this.sendAgentMessage(`✅ Task completed: ${data.task.description}`);
+    });
+
+    this.orchestrator.on('task_failed', (data) => {
+      logger.info('Orchestrator event: task_failed', data);
+      this.broadcastEvent('task_failed', data);
+      this.sendAgentMessage(`❌ Task failed: ${data.task.description} - ${data.error}`);
+    });
+
+    this.orchestrator.on('reflection_completed', (data) => {
+      logger.info('Orchestrator event: reflection_completed', data);
+      this.broadcastEvent('reflection_completed', data);
+      this.sendAgentMessage(`🤔 Reflection: ${data.feedback} (Progress: ${Math.round(data.progressScore * 100)}%)`);
+    });
+
+    this.orchestrator.on('plan_completed', (data) => {
+      logger.info('Orchestrator event: plan_completed', data);
+      this.broadcastEvent('plan_completed', data);
+      this.sendAgentMessage(`🎉 Plan completed! Iterations: ${data.iterations}, Cost: $${data.totalCost.toFixed(4)}`);
+    });
+
+    this.orchestrator.on('error', (data) => {
+      logger.error('Orchestrator event: error', data);
+      this.broadcastEvent('error', data);
+      this.sendAgentMessage(`⚠️ Error: ${data.error}`);
+    });
+
+    this.orchestrator.on('agent_stopped', (data) => {
+      logger.info('Orchestrator event: agent_stopped', data);
+      this.broadcastEvent('agent_stopped', data);
+    });
+
+    logger.info('Orchestrator event listeners registered');
   }
 
   public sendAgentMessage(content: string, metadata?: Record<string, any>) {

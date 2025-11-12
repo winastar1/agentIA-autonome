@@ -7,8 +7,9 @@ import { Critic } from '../critic/Critic';
 import { ToolRegistry } from '../tools/ToolRegistry';
 import { config } from '../utils/config';
 import logger from '../utils/logger';
+import { EventEmitter } from 'events';
 
-export class Orchestrator {
+export class Orchestrator extends EventEmitter {
   private state: AgentState;
   private modelRouter: ModelRouter;
   private memoryManager: MemoryManager;
@@ -19,6 +20,7 @@ export class Orchestrator {
   private isRunning: boolean = false;
 
   constructor() {
+    super();
     this.modelRouter = new ModelRouter();
     this.memoryManager = new MemoryManager();
     this.toolRegistry = new ToolRegistry();
@@ -51,14 +53,17 @@ export class Orchestrator {
     this.state.iterationCount = 0;
 
     logger.info('Processing new directive', { directive });
+    this.emit('directive_received', { directive, timestamp: new Date() });
 
     try {
       await this.autonomousLoop(directive);
     } catch (error: any) {
       logger.error('Error in autonomous loop', { error: error.message });
       this.state.currentPhase = 'idle';
+      this.emit('error', { error: error.message, timestamp: new Date() });
     } finally {
       this.isRunning = false;
+      this.emit('agent_stopped', { timestamp: new Date() });
     }
   }
 
@@ -93,6 +98,14 @@ export class Orchestrator {
         if (this.state.currentPlan && this.planner.isPlanComplete(this.state.currentPlan)) {
           logger.info('Plan completed successfully');
           this.state.currentPhase = 'completed';
+          this.emit('phase_changed', { phase: 'completed', timestamp: new Date() });
+          this.emit('plan_completed', { 
+            planId: this.state.currentPlan.id,
+            iterations: this.state.iterationCount,
+            totalCost: this.state.totalCost,
+            totalTokens: this.state.totalTokensUsed,
+            timestamp: new Date() 
+          });
           break;
         }
 
@@ -131,6 +144,7 @@ export class Orchestrator {
   private async thinkPhase(objective: string): Promise<void> {
     this.state.currentPhase = 'thinking';
     logger.info('THINK phase started');
+    this.emit('phase_changed', { phase: 'thinking', timestamp: new Date() });
 
     const context = this.memoryManager.getContextSummary();
     
@@ -170,6 +184,12 @@ Provide your thoughts in 2-3 sentences.`;
 
       this.memoryManager.addToWorkingMemory(`Thinking: ${response.content}`);
       logger.info('THINK phase completed', { thoughts: response.content });
+      this.emit('thinking_completed', { 
+        thoughts: response.content, 
+        tokensUsed: response.tokensUsed,
+        cost: response.cost,
+        timestamp: new Date() 
+      });
     } catch (error: any) {
       logger.error('THINK phase failed', { error: error.message });
     }
@@ -178,6 +198,7 @@ Provide your thoughts in 2-3 sentences.`;
   private async planPhase(objective: string): Promise<void> {
     this.state.currentPhase = 'planning';
     logger.info('PLAN phase started');
+    this.emit('phase_changed', { phase: 'planning', timestamp: new Date() });
 
     const context = this.memoryManager.getContextSummary();
 
@@ -193,6 +214,16 @@ Provide your thoughts in 2-3 sentences.`;
         planId: plan.id,
         taskCount: plan.tasks.length,
       });
+      this.emit('plan_created', { 
+        plan: {
+          id: plan.id,
+          objective: plan.objective,
+          strategy: plan.strategy,
+          taskCount: plan.tasks.length,
+          tasks: plan.tasks
+        },
+        timestamp: new Date() 
+      });
     } catch (error: any) {
       logger.error('PLAN phase failed', { error: error.message });
       throw error;
@@ -202,6 +233,7 @@ Provide your thoughts in 2-3 sentences.`;
   private async actPhase(): Promise<void> {
     this.state.currentPhase = 'executing';
     logger.info('ACT phase started');
+    this.emit('phase_changed', { phase: 'executing', timestamp: new Date() });
 
     if (!this.state.currentPlan) {
       logger.warn('No plan available for execution');
@@ -222,6 +254,10 @@ Provide your thoughts in 2-3 sentences.`;
       taskId: nextTask.id, 
       description: nextTask.description 
     });
+    this.emit('task_started', { 
+      task: nextTask,
+      timestamp: new Date() 
+    });
 
     const context = this.memoryManager.getContextSummary();
 
@@ -237,12 +273,25 @@ Provide your thoughts in 2-3 sentences.`;
           `Task completed: ${nextTask.description}. Result: ${JSON.stringify(result.output)}`
         );
         logger.info('Task completed successfully', { taskId: nextTask.id });
+        this.emit('task_completed', { 
+          task: nextTask,
+          result: result.output,
+          tokensUsed: result.tokensUsed,
+          cost: result.cost,
+          toolCalls: result.toolCalls,
+          timestamp: new Date() 
+        });
       } else {
         this.planner.updateTaskStatus(this.state.currentPlan, nextTask.id, 'failed');
         this.memoryManager.addToEpisodicMemory(
           `Task failed: ${nextTask.description}. Error: ${result.error}`
         );
         logger.warn('Task failed', { taskId: nextTask.id, error: result.error });
+        this.emit('task_failed', { 
+          task: nextTask,
+          error: result.error,
+          timestamp: new Date() 
+        });
       }
 
       this.state.currentTask = undefined;
@@ -261,6 +310,7 @@ Provide your thoughts in 2-3 sentences.`;
   private async reflectPhase(): Promise<void> {
     this.state.currentPhase = 'reflecting';
     logger.info('REFLECT phase started');
+    this.emit('phase_changed', { phase: 'reflecting', timestamp: new Date() });
 
     if (!this.state.currentPlan) {
       return;
@@ -291,6 +341,15 @@ Provide your thoughts in 2-3 sentences.`;
         progressScore: evaluation.progressScore,
         shouldContinue: evaluation.shouldContinue,
       });
+      this.emit('reflection_completed', { 
+        progressScore: evaluation.progressScore,
+        feedback: evaluation.feedback,
+        shouldContinue: evaluation.shouldContinue,
+        completedTasks: completedTasks.length,
+        failedTasks: failedTasks.length,
+        remainingTasks: remainingTasks.length,
+        timestamp: new Date() 
+      });
 
       if (!evaluation.shouldContinue || failedTasks.length > 3) {
         logger.info('Reflection suggests replanning');
@@ -302,6 +361,17 @@ Provide your thoughts in 2-3 sentences.`;
         );
         this.state.currentPlan = revisedPlan;
         this.memoryManager.addToEpisodicMemory('Plan revised based on reflection');
+        this.emit('plan_revised', { 
+          plan: {
+            id: revisedPlan.id,
+            objective: revisedPlan.objective,
+            strategy: revisedPlan.strategy,
+            taskCount: revisedPlan.tasks.length,
+            tasks: revisedPlan.tasks
+          },
+          reason: evaluation.feedback,
+          timestamp: new Date() 
+        });
       }
     } catch (error: any) {
       logger.error('REFLECT phase failed', { error: error.message });
