@@ -22,6 +22,9 @@ Un agent IA totalement autonome capable de penser, réfléchir et exécuter des 
 - **Mémoire épisodique** : Journal chronologique des événements
 - **Mémoire sémantique** : Stockage vectoriel pour la récupération de connaissances
 - **Consolidation automatique** de la mémoire
+- **Persistance PostgreSQL** : Mémoire persistante avec pgvector pour les embeddings
+- **Cache Redis** : Accès rapide aux données fréquemment utilisées
+- **Recherche vectorielle** : Recherche sémantique avec embeddings OpenAI
 
 ### Capacités Cognitives
 - **Planification** : Décomposition de tâches complexes en graphes structurés
@@ -32,10 +35,17 @@ Un agent IA totalement autonome capable de penser, réfléchir et exécuter des 
 ### Outils Intégrés
 - 🌐 **Recherche web** et navigation
 - 📁 **Système de fichiers** (lecture/écriture)
-- 💻 **Exécution shell** dans un environnement sécurisé
+- 💻 **Exécution shell sécurisée** avec whitelist de commandes et sandbox
 - 🔗 **Requêtes HTTP** (GET, POST, PUT, DELETE)
 - 📂 **Gestion de répertoires**
 - 🔧 **Extensible** avec des outils personnalisés
+
+### Sécurité et Contrôle
+- **Sandbox shell** : Liste blanche de commandes autorisées
+- **Protection anti-patterns** : Détection de commandes dangereuses
+- **Limites de coût** : Budget maximum par session configurable
+- **Timeouts** : Limites de temps d'exécution pour les commandes
+- **Audit complet** : Journalisation de toutes les actions
 
 ### Communication
 - **API REST** pour les requêtes synchrones
@@ -49,6 +59,8 @@ Un agent IA totalement autonome capable de penser, réfléchir et exécuter des 
 - Node.js 20+
 - npm ou yarn
 - Clés API pour les fournisseurs d'IA (OpenAI, Anthropic, Google)
+- PostgreSQL 14+ avec extension pgvector (optionnel, pour mémoire persistante)
+- Redis 7+ (optionnel, pour cache)
 
 ### Installation Locale
 
@@ -98,9 +110,19 @@ NODE_ENV=production
 # Configuration de l'agent
 MAX_ITERATIONS=50
 MAX_EXECUTION_TIME_MS=300000
+MAX_COST_PER_SESSION=10.0
 DEFAULT_MODEL=gpt-4-turbo-preview
 FAST_MODEL=gpt-3.5-turbo
 REASONING_MODEL=claude-3-opus-20240229
+
+# Configuration de la mémoire
+ENABLE_PERSISTENT_MEMORY=true
+ENABLE_VECTOR_EMBEDDINGS=true
+
+# Configuration de sécurité
+ENABLE_SHELL_SANDBOX=true
+MAX_SHELL_EXECUTION_TIME=30000
+ALLOWED_SHELL_COMMANDS=ls,pwd,cat,echo,grep,find,wc,head,tail,date
 
 # Configuration vocale (optionnel)
 ELEVENLABS_API_KEY=votre_clé_elevenlabs
@@ -186,28 +208,34 @@ ws.on('message', (data) => {
 ```
 src/
 ├── core/
-│   └── Orchestrator.ts       # Boucle autonome principale
+│   └── Orchestrator.ts              # Boucle autonome principale
 ├── models/
-│   └── ModelRouter.ts         # Routage multi-modèles IA
+│   └── ModelRouter.ts               # Routage multi-modèles IA
 ├── memory/
-│   └── MemoryManager.ts       # Système de mémoire
+│   ├── MemoryManager.ts             # Système de mémoire (legacy)
+│   └── PersistentMemoryManager.ts   # Mémoire persistante avec pgvector
+├── database/
+│   ├── client.ts                    # Client PostgreSQL + Redis
+│   └── schema.sql                   # Schéma de base de données
 ├── planner/
-│   └── Planner.ts             # Décomposition de tâches
+│   └── Planner.ts                   # Décomposition de tâches
 ├── executor/
-│   └── Executor.ts            # Exécution de tâches
+│   ├── Executor.ts                  # Exécution de tâches (legacy)
+│   └── EnhancedExecutor.ts          # Exécution améliorée avec vérification
 ├── critic/
-│   └── Critic.ts              # Auto-évaluation
+│   └── Critic.ts                    # Auto-évaluation
 ├── tools/
-│   └── ToolRegistry.ts        # Registre d'outils
+│   ├── ToolRegistry.ts              # Registre d'outils
+│   └── SecureShellExecutor.ts       # Exécution shell sécurisée
 ├── communication/
-│   ├── Server.ts              # API REST + WebSocket
-│   └── VoiceHandler.ts        # Communication vocale
+│   ├── Server.ts                    # API REST + WebSocket
+│   └── VoiceHandler.ts              # Communication vocale
 ├── utils/
-│   ├── config.ts              # Configuration
-│   └── logger.ts              # Journalisation
+│   ├── config.ts                    # Configuration
+│   └── logger.ts                    # Journalisation
 ├── types/
-│   └── index.ts               # Définitions TypeScript
-└── index.ts                   # Point d'entrée
+│   └── index.ts                     # Définitions TypeScript
+└── index.ts                         # Point d'entrée
 ```
 
 ## 🔄 Boucle Autonome
@@ -234,34 +262,94 @@ npm run build
 npm run lint
 
 # Tests
-npm test
+npm test                    # Tous les tests
+npm run test:unit          # Tests unitaires
+npm run test:integration   # Tests d'intégration
+npm run test:coverage      # Couverture de code
 ```
 
 ## 📊 Monitoring
 
 L'agent fournit des métriques détaillées :
 - Nombre d'itérations
-- Tokens utilisés
-- Coût total
-- Phase actuelle
-- Progression du plan
-- Historique de la mémoire
+- Tokens utilisés par modèle
+- Coût total en temps réel
+- Phase actuelle (Think/Plan/Act/Reflect)
+- Progression du plan avec statut des tâches
+- Statistiques de mémoire (working/episodic/semantic)
+- Historique complet des exécutions
+- Alertes de dépassement de budget
 
 ## 🔒 Sécurité
 
-- Toutes les actions sont journalisées pour l'audit
-- Les clés API sont stockées de manière sécurisée dans les variables d'environnement
-- L'exécution shell est isolée
-- Gestion des erreurs robuste
+- **Sandbox shell** : Whitelist de commandes autorisées configurable
+- **Protection anti-patterns** : Détection automatique de commandes dangereuses (rm -rf /, fork bombs, etc.)
+- **Limites de coût** : Budget maximum par session pour éviter les dépenses excessives
+- **Timeouts** : Limites de temps d'exécution pour toutes les commandes shell
+- **Audit complet** : Toutes les actions sont journalisées pour l'audit
+- **Stockage sécurisé** : Les clés API sont stockées dans les variables d'environnement
+- **Gestion des erreurs** : Mécanismes de récupération robustes
 
 ## 🌐 Déploiement Cloud
 
 L'agent est conçu pour le déploiement cloud :
-- Conteneurisé avec Docker
-- Prêt pour Kubernetes
-- Health checks intégrés
-- Gestion gracieuse de l'arrêt
-- Logs structurés
+- **Conteneurisé avec Docker** : Image optimisée avec multi-stage build
+- **Docker Compose** : Stack complet avec PostgreSQL (pgvector) et Redis
+- **Prêt pour Kubernetes** : Configuration adaptable pour orchestration
+- **Health checks** : Endpoints de santé pour PostgreSQL, Redis et l'agent
+- **Gestion gracieuse** : Arrêt propre avec sauvegarde de l'état
+- **Logs structurés** : Format JSON pour agrégation centralisée
+- **Scalabilité** : Architecture stateless avec état en base de données
+
+## 🧪 Tests
+
+Le projet inclut une suite de tests complète :
+
+### Tests Unitaires
+- `SecureShellExecutor` : Validation de la sécurité shell
+- `PersistentMemoryManager` : Tests de persistance et embeddings
+- `EnhancedExecutor` : Vérification de l'exécution des tâches
+
+### Tests d'Intégration
+- Boucle autonome complète end-to-end
+- Persistance de la mémoire entre sessions
+- Gestion des erreurs et récupération
+- Suivi des coûts et limites budgétaires
+
+### Exécution des Tests
+```bash
+npm test                    # Tous les tests
+npm run test:unit          # Tests unitaires uniquement
+npm run test:integration   # Tests d'intégration uniquement
+npm run test:coverage      # Rapport de couverture
+npm run test:watch         # Mode watch pour développement
+```
+
+## 🆕 Nouveautés v2.0
+
+### Mémoire Persistante
+- Stockage PostgreSQL avec extension pgvector
+- Embeddings vectoriels pour recherche sémantique
+- Cache Redis pour performances optimales
+- Consolidation automatique des mémoires importantes
+
+### Sécurité Renforcée
+- Sandbox shell avec whitelist de commandes
+- Détection de patterns dangereux
+- Limites de coût par session
+- Timeouts configurables
+
+### Exécution Améliorée
+- Vérification automatique des critères d'acceptation
+- Retry intelligent avec backoff exponentiel
+- Conversation contextuelle pour résolution de problèmes
+- Meilleure gestion des erreurs
+
+### Tests Complets
+- Suite de tests unitaires et d'intégration
+- Configuration Jest avec TypeScript
+- Couverture de code
+- Tests de sécurité
 
 ## 📝 Licence
 

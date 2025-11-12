@@ -37,5 +37,13 @@ export const config = {
     defaultModel: process.env.DEFAULT_MODEL || 'gpt-4-turbo-preview',
     fastModel: process.env.FAST_MODEL || 'gpt-3.5-turbo',
     reasoningModel: process.env.REASONING_MODEL || 'claude-3-opus-20240229',
+    maxCostPerSession: parseFloat(process.env.MAX_COST_PER_SESSION || '10.0'),
+    enablePersistentMemory: process.env.ENABLE_PERSISTENT_MEMORY !== 'false',
+    enableVectorEmbeddings: process.env.ENABLE_VECTOR_EMBEDDINGS !== 'false',
   } as AgentConfig,
+  security: {
+    allowedShellCommands: (process.env.ALLOWED_SHELL_COMMANDS || 'ls,pwd,cat,echo,grep,find,wc,head,tail,date').split(','),
+    enableShellSandbox: process.env.ENABLE_SHELL_SANDBOX !== 'false',
+    maxShellExecutionTime: parseInt(process.env.MAX_SHELL_EXECUTION_TIME || '30000'),
+  },
 };

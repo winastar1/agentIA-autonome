@@ -3,15 +3,14 @@ import logger from '../utils/logger';
 import axios from 'axios';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
+import { SecureShellExecutor } from './SecureShellExecutor';
 
 export class ToolRegistry {
   private tools: Map<string, Tool> = new Map();
+  private shellExecutor: SecureShellExecutor;
 
   constructor() {
+    this.shellExecutor = new SecureShellExecutor();
     this.registerDefaultTools();
   }
 
@@ -180,24 +179,7 @@ export class ToolRegistry {
   }
 
   private async executeShell(command: string): Promise<any> {
-    try {
-      logger.info('Executing shell command', { command });
-      const { stdout, stderr } = await execAsync(command);
-      return {
-        success: true,
-        stdout,
-        stderr,
-        command,
-      };
-    } catch (error: any) {
-      logger.error('Shell command failed', { error: error.message });
-      return {
-        success: false,
-        error: error.message,
-        stdout: error.stdout,
-        stderr: error.stderr,
-      };
-    }
+    return await this.shellExecutor.execute(command);
   }
 
   private async httpRequest(

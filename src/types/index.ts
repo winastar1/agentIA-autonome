@@ -4,6 +4,9 @@ export interface AgentConfig {
   defaultModel: string;
   fastModel: string;
   reasoningModel: string;
+  maxCostPerSession: number;
+  enablePersistentMemory: boolean;
+  enableVectorEmbeddings: boolean;
 }
 
 export interface Message {

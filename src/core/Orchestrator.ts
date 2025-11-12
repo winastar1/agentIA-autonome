@@ -1,8 +1,8 @@
 import { AgentState, Plan, Task, ExecutionResult, Reflection } from '../types';
 import { ModelRouter } from '../models/ModelRouter';
-import { MemoryManager } from '../memory/MemoryManager';
+import { PersistentMemoryManager } from '../memory/PersistentMemoryManager';
 import { Planner } from '../planner/Planner';
-import { Executor } from '../executor/Executor';
+import { EnhancedExecutor } from '../executor/EnhancedExecutor';
 import { Critic } from '../critic/Critic';
 import { ToolRegistry } from '../tools/ToolRegistry';
 import { config } from '../utils/config';
@@ -12,9 +12,9 @@ import { EventEmitter } from 'events';
 export class Orchestrator extends EventEmitter {
   private state: AgentState;
   private modelRouter: ModelRouter;
-  private memoryManager: MemoryManager;
+  private memoryManager: PersistentMemoryManager;
   private planner: Planner;
-  private executor: Executor;
+  private executor: EnhancedExecutor;
   private critic: Critic;
   private toolRegistry: ToolRegistry;
   private isRunning: boolean = false;
@@ -22,10 +22,10 @@ export class Orchestrator extends EventEmitter {
   constructor() {
     super();
     this.modelRouter = new ModelRouter();
-    this.memoryManager = new MemoryManager();
+    this.memoryManager = new PersistentMemoryManager();
     this.toolRegistry = new ToolRegistry();
     this.planner = new Planner(this.modelRouter);
-    this.executor = new Executor(this.modelRouter, this.toolRegistry);
+    this.executor = new EnhancedExecutor(this.modelRouter, this.toolRegistry);
     this.critic = new Critic(this.modelRouter);
 
     this.state = {
@@ -51,6 +51,8 @@ export class Orchestrator extends EventEmitter {
     this.state.currentPhase = 'thinking';
     this.state.startTime = new Date();
     this.state.iterationCount = 0;
+    this.state.totalTokensUsed = 0;
+    this.state.totalCost = 0;
 
     logger.info('Processing new directive', { directive });
     this.emit('directive_received', { directive, timestamp: new Date() });
@@ -70,8 +72,9 @@ export class Orchestrator extends EventEmitter {
   private async autonomousLoop(objective: string): Promise<void> {
     const maxIterations = config.agent.maxIterations;
     const maxExecutionTime = config.agent.maxExecutionTimeMs;
+    const maxCost = config.agent.maxCostPerSession;
 
-    this.memoryManager.addToWorkingMemory(`New objective: ${objective}`);
+    await this.memoryManager.addToWorkingMemory(`New objective: ${objective}`);
 
     while (this.state.iterationCount < maxIterations) {
       this.state.iterationCount++;
@@ -80,6 +83,19 @@ export class Orchestrator extends EventEmitter {
       const elapsed = Date.now() - this.state.startTime.getTime();
       if (elapsed > maxExecutionTime) {
         logger.warn('Max execution time reached', { elapsed, maxExecutionTime });
+        break;
+      }
+
+      if (this.state.totalCost > maxCost) {
+        logger.warn('Max cost per session reached', { 
+          totalCost: this.state.totalCost, 
+          maxCost 
+        });
+        this.emit('cost_limit_reached', {
+          totalCost: this.state.totalCost,
+          maxCost,
+          timestamp: new Date(),
+        });
         break;
       }
 
@@ -123,7 +139,7 @@ export class Orchestrator extends EventEmitter {
           error: error.message 
         });
         
-        this.memoryManager.addToEpisodicMemory(
+        await this.memoryManager.addToEpisodicMemory(
           `Error in iteration ${this.state.iterationCount}: ${error.message}`
         );
       }
@@ -146,7 +162,7 @@ export class Orchestrator extends EventEmitter {
     logger.info('THINK phase started');
     this.emit('phase_changed', { phase: 'thinking', timestamp: new Date() });
 
-    const context = this.memoryManager.getContextSummary();
+    const context = await this.memoryManager.getContextSummary();
     
     const thinkingPrompt = `You are an autonomous AI agent. Think deeply about the current situation and decide on the best course of action.
 
@@ -182,7 +198,7 @@ Provide your thoughts in 2-3 sentences.`;
       this.state.totalTokensUsed += response.tokensUsed;
       this.state.totalCost += response.cost;
 
-      this.memoryManager.addToWorkingMemory(`Thinking: ${response.content}`);
+      await this.memoryManager.addToWorkingMemory(`Thinking: ${response.content}`);
       logger.info('THINK phase completed', { thoughts: response.content });
       this.emit('thinking_completed', { 
         thoughts: response.content, 
@@ -200,13 +216,13 @@ Provide your thoughts in 2-3 sentences.`;
     logger.info('PLAN phase started');
     this.emit('phase_changed', { phase: 'planning', timestamp: new Date() });
 
-    const context = this.memoryManager.getContextSummary();
+    const context = await this.memoryManager.getContextSummary();
 
     try {
       const plan = await this.planner.createPlan(objective, context);
       this.state.currentPlan = plan;
 
-      this.memoryManager.addToWorkingMemory(
+      await this.memoryManager.addToWorkingMemory(
         `Created plan with ${plan.tasks.length} tasks: ${plan.strategy}`
       );
 
@@ -259,7 +275,7 @@ Provide your thoughts in 2-3 sentences.`;
       timestamp: new Date() 
     });
 
-    const context = this.memoryManager.getContextSummary();
+    const context = await this.memoryManager.getContextSummary();
 
     try {
       const result = await this.executor.executeTask(nextTask, context);
@@ -269,7 +285,7 @@ Provide your thoughts in 2-3 sentences.`;
 
       if (result.success) {
         this.planner.updateTaskStatus(this.state.currentPlan, nextTask.id, 'completed');
-        this.memoryManager.addToEpisodicMemory(
+        await this.memoryManager.addToEpisodicMemory(
           `Task completed: ${nextTask.description}. Result: ${JSON.stringify(result.output)}`
         );
         logger.info('Task completed successfully', { taskId: nextTask.id });
@@ -283,7 +299,7 @@ Provide your thoughts in 2-3 sentences.`;
         });
       } else {
         this.planner.updateTaskStatus(this.state.currentPlan, nextTask.id, 'failed');
-        this.memoryManager.addToEpisodicMemory(
+        await this.memoryManager.addToEpisodicMemory(
           `Task failed: ${nextTask.description}. Error: ${result.error}`
         );
         logger.warn('Task failed', { taskId: nextTask.id, error: result.error });
@@ -333,7 +349,7 @@ Provide your thoughts in 2-3 sentences.`;
         this.state.currentPlan.objective
       );
 
-      this.memoryManager.addToWorkingMemory(
+      await this.memoryManager.addToWorkingMemory(
         `Progress evaluation: ${evaluation.feedback} (Score: ${evaluation.progressScore})`
       );
 
@@ -353,14 +369,14 @@ Provide your thoughts in 2-3 sentences.`;
 
       if (!evaluation.shouldContinue || failedTasks.length > 3) {
         logger.info('Reflection suggests replanning');
-        const context = this.memoryManager.getContextSummary();
+        const context = await this.memoryManager.getContextSummary();
         const revisedPlan = await this.planner.revisePlan(
           this.state.currentPlan,
           evaluation.feedback,
           context
         );
         this.state.currentPlan = revisedPlan;
-        this.memoryManager.addToEpisodicMemory('Plan revised based on reflection');
+        await this.memoryManager.addToEpisodicMemory('Plan revised based on reflection');
         this.emit('plan_revised', { 
           plan: {
             id: revisedPlan.id,
