@@ -3,6 +3,7 @@ import { CommunicationServer } from './communication/Server';
 import { VoiceHandler } from './communication/VoiceHandler';
 import { config } from './utils/config';
 import logger from './utils/logger';
+import { db } from './database/client';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -13,6 +14,9 @@ async function main() {
       port: config.server.port,
       nodeEnv: config.server.nodeEnv,
       maxIterations: config.agent.maxIterations,
+      persistentMemory: config.agent.enablePersistentMemory,
+      vectorEmbeddings: config.agent.enableVectorEmbeddings,
+      maxCostPerSession: config.agent.maxCostPerSession,
     });
 
     const logsDir = path.join(process.cwd(), 'logs');
@@ -20,8 +24,23 @@ async function main() {
       fs.mkdirSync(logsDir, { recursive: true });
     }
 
+    if (config.agent.enablePersistentMemory) {
+      try {
+        await db.initialize();
+        const health = await db.healthCheck();
+        logger.info('Database health check', health);
+      } catch (error: any) {
+        logger.warn('Database initialization failed, falling back to in-memory storage', {
+          error: error.message,
+        });
+      }
+    }
+
     const orchestrator = new Orchestrator();
-    logger.info('Orchestrator initialized');
+    
+    const memoryManager = orchestrator.getMemoryManager();
+    await memoryManager.initialize();
+    logger.info('Orchestrator and memory manager initialized');
 
     const voiceHandler = new VoiceHandler();
     if (voiceHandler.isEnabled()) {
@@ -54,6 +73,9 @@ async function main() {
       logger.info('Received SIGINT, shutting down gracefully...');
       orchestrator.stop();
       await server.stop();
+      if (config.agent.enablePersistentMemory) {
+        await db.close();
+      }
       process.exit(0);
     });
 
@@ -61,6 +83,9 @@ async function main() {
       logger.info('Received SIGTERM, shutting down gracefully...');
       orchestrator.stop();
       await server.stop();
+      if (config.agent.enablePersistentMemory) {
+        await db.close();
+      }
       process.exit(0);
     });
 
